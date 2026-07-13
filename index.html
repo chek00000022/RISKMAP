@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Экспозиция дома БПЛА — v0.02 (точная граница)</title>
+<title>Экспозиция дома БПЛА — v0.03 (зеркала Overpass)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -68,7 +68,7 @@
   <div id="map"></div>
   <div id="panel">
     <div>
-      <h1 style="font-size:22px;">ЭКСПОЗИЦИЯ БПЛА <span style="color:var(--text-dim);font-size:14px;">v0.02</span></h1>
+      <h1 style="font-size:22px;">ЭКСПОЗИЦИЯ БПЛА <span style="color:var(--text-dim);font-size:14px;">v0.03</span></h1>
       <div class="small">Геометрическая эвристика открытости/экранирования здания в направлении госграницы. Не прогноз. Действуйте по инструкциям РСЧС.</div>
     </div>
 
@@ -181,7 +181,15 @@ const HAZARD_CATEGORIES = {
 };
 const CIVIL_COLOR = '#6aa0ff';
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+// Список зеркал Overpass API — пробуем по очереди, при таймауте/ошибке переключаемся дальше.
+// Российское зеркало первым: у overpass-api.de (Германия) бывают перегрузки/504,
+// и маршрутизация из РФ к нему может быть менее стабильной.
+const OVERPASS_MIRRORS = [
+  'https://overpass.openstreetmap.ru/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://lz4.overpass-api.de/api/interpreter'
+];
 const ELEVATION_URL = 'https://api.open-elevation.com/api/v1/lookup';
 
 /* ============================================================
@@ -253,12 +261,32 @@ function tryManualCoords(){
 /* ============================================================
    OVERPASS
    ============================================================ */
-async function overpassQuery(q){
-  const res = await fetch(OVERPASS_URL, {
-    method:'POST', body:'data=' + encodeURIComponent(q)
-  });
-  if(!res.ok) throw new Error('Overpass HTTP ' + res.status);
-  return res.json();
+async function overpassQuery(q, opts={}){
+  const timeoutMs = opts.timeoutMs || 28000;
+  let lastErr = null;
+  for(const url of OVERPASS_MIRRORS){
+    const host = url.replace('https://','').split('/')[0];
+    try{
+      log(`Overpass → ${host}...`);
+      const controller = new AbortController();
+      const timer = setTimeout(()=>controller.abort(), timeoutMs);
+      const res = await fetch(url, {
+        method:'POST',
+        body:'data=' + encodeURIComponent(q),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      log(`✓ ${host} ответил`);
+      return data;
+    }catch(err){
+      const reason = err.name === 'AbortError' ? `таймаут ${timeoutMs/1000}с` : err.message;
+      lastErr = err;
+      log(`⚠ ${host}: ${reason} — пробую следующее зеркало`);
+    }
+  }
+  throw new Error('все зеркала Overpass недоступны (' + (lastErr ? lastErr.message : 'нет ответа') + ')');
 }
 
 function buildingsQL(lat, lon, r){
@@ -314,7 +342,7 @@ async function fetchBorderLine(){
 way["boundary"="administrative"]["admin_level"="2"](${s},${w},${n},${e});
 out geom;`;
   try{
-    const data = await overpassQuery(q);
+    const data = await overpassQuery(q, {timeoutMs:65000});
     const ways = (data.elements||[]).filter(el=>el.type==='way' && el.geometry && el.geometry.length>1);
     if(ways.length === 0) throw new Error('пустой ответ (в этом bbox нет тегированных way admin_level=2)');
 
@@ -490,7 +518,7 @@ async function runCalculation(){
 
   try{
     log('Запрашиваю здания вокруг дома (Overpass)...');
-    const bData = await overpassQuery(buildingsQL(housePoint.lat, housePoint.lon, searchRadius));
+    const bData = await overpassQuery(buildingsQL(housePoint.lat, housePoint.lon, searchRadius), {timeoutMs:28000});
     buildingsData = (bData.elements||[]).filter(e=>e.type==='way' && e.geometry).map(e=>{
       const coords = e.geometry.map(g=>[g.lon,g.lat]);
       if(coords.length>=3){
@@ -506,7 +534,7 @@ async function runCalculation(){
     drawBuildings();
 
     log('Запрашиваю опасные объекты (Overpass)...');
-    const hData = await overpassQuery(hazardsQL(housePoint.lat, housePoint.lon, Math.max(searchRadius, 5000)));
+    const hData = await overpassQuery(hazardsQL(housePoint.lat, housePoint.lon, Math.max(searchRadius, 5000)), {timeoutMs:28000});
     const hazards = (hData.elements||[]).map(e=>{
       const lat = e.lat || (e.center && e.center.lat);
       const lon = e.lon || (e.center && e.center.lon);
@@ -519,7 +547,7 @@ async function runCalculation(){
     drawHazards(hazards);
 
     log('Запрашиваю гражданскую инфраструктуру (справочно)...');
-    const cData = await overpassQuery(civilQL(housePoint.lat, housePoint.lon, searchRadius));
+    const cData = await overpassQuery(civilQL(housePoint.lat, housePoint.lon, searchRadius), {timeoutMs:28000});
     const civil = (cData.elements||[]).map(e=>{
       const lat = e.lat || (e.center && e.center.lat);
       const lon = e.lon || (e.center && e.center.lon);
