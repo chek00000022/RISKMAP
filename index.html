@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Карта риска зданий — прототип v0.01</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-panel:#20221c;
+    --bg-panel-2:#2a2c23;
+    --bg-app:#16170f;
+    --line:#3b3d31;
+    --text:#e7e4d8;
+    --text-dim:#8f9182;
+    --amber:#e0a039;
+    --amber-dim:#8a692a;
+    --danger:#c94a3c;
+    --danger-dim:#5c2620;
+    --ok:#5f8f6a;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg-app);
+    color:var(--text);
+    font-family:'IBM Plex Sans', system-ui, sans-serif;
+  }
+  #app{
+    display:grid;
+    grid-template-columns: 340px 1fr;
+    grid-template-rows: 56px 1fr;
+    height:100vh;
+  }
+  header{
+    grid-column: 1 / 3;
+    display:flex; align-items:center; gap:16px;
+    padding:0 18px;
+    background:var(--bg-panel);
+    border-bottom:1px solid var(--line);
+  }
+  header .title{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:14px; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--amber);
+  }
+  header .sub{
+    font-size:12px; color:var(--text-dim);
+    font-family:'IBM Plex Mono', monospace;
+  }
+  header .stats{
+    margin-left:auto;
+    display:flex; gap:22px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+  }
+  header .stats b{ color:var(--danger); font-size:14px; display:block; }
+  header .stats span{ color:var(--text-dim); }
+
+  #sidebar{
+    background:var(--bg-panel);
+    border-right:1px solid var(--line);
+    padding:16px;
+    overflow-y:auto;
+    display:flex; flex-direction:column; gap:18px;
+  }
+  .block{
+    background:var(--bg-panel-2);
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:12px 14px;
+  }
+  .block h3{
+    margin:0 0 10px 0;
+    font-size:11px; text-transform:uppercase; letter-spacing:0.09em;
+    color:var(--text-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-weight:500;
+  }
+  .btn{
+    width:100%;
+    background:var(--amber-dim);
+    color:var(--text);
+    border:1px solid var(--amber);
+    padding:9px 10px;
+    border-radius:3px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    cursor:pointer;
+    text-align:left;
+    margin-bottom:8px;
+    transition:background .15s;
+  }
+  .btn:hover{ background:var(--amber); color:#1a1a12; }
+  .btn:disabled{ opacity:0.35; cursor:default; }
+  .btn:disabled:hover{ background:var(--amber-dim); color:var(--text); }
+  .btn.secondary{
+    background:transparent; border-color:var(--line); color:var(--text-dim);
+  }
+  .btn.secondary:hover{ background:var(--bg-panel); color:var(--text); border-color:var(--text-dim); }
+
+  .row{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; }
+  .row label{ color:var(--text-dim); }
+  .row .val{ font-family:'IBM Plex Mono', monospace; color:var(--amber); }
+  input[type=range]{ width:100%; accent-color:var(--amber); }
+
+  .legend-item{ display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:6px; color:var(--text-dim); }
+  .swatch{ width:14px; height:14px; border-radius:2px; flex-shrink:0; }
+
+  .note{
+    font-size:11px; line-height:1.5; color:var(--text-dim);
+    border-left:2px solid var(--amber-dim); padding-left:10px;
+  }
+
+  #map{ width:100%; height:100%; background:#e5e3da; }
+
+  .status{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px; color:var(--text-dim);
+    min-height:16px;
+  }
+  .status.busy{ color:var(--amber); }
+  .status.error{ color:var(--danger); }
+
+  .leaflet-popup-content-wrapper{
+    background:var(--bg-panel); color:var(--text);
+    border:1px solid var(--line); border-radius:4px;
+  }
+  .leaflet-popup-content{ font-family:'IBM Plex Mono', monospace; font-size:12px; }
+  .leaflet-popup-tip{ background:var(--bg-panel); }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <div>
+      <div class="title">Карта риска зданий · Брянск</div>
+      <div class="sub">прототип v0.01 — личное использование</div>
+    </div>
+    <div class="stats">
+      <div><b id="statBuildings">0</b><span>зданий загружено</span></div>
+      <div><b id="statDanger">0</b><span>в зоне риска</span></div>
+      <div><b id="statThreats">0</b><span>опасных объектов</span></div>
+    </div>
+  </header>
+
+  <div id="sidebar">
+
+    <div class="block">
+      <h3>1 · Опасные объекты</h3>
+      <button class="btn" id="loadThreats">Загрузить в границах карты</button>
+      <div class="status" id="statusThreats"></div>
+    </div>
+
+    <div class="block">
+      <h3>2 · Здания</h3>
+      <button class="btn" id="loadBuildings">Загрузить в границах карты</button>
+      <div class="status" id="statusBuildings">Совет: приблизьте карту перед загрузкой — большая площадь = долгий запрос и Overpass может отклонить.</div>
+    </div>
+
+    <div class="block">
+      <h3>3 · Порог риска</h3>
+      <div class="row"><label>Радиус опасности</label><span class="val" id="thresholdVal">500 м</span></div>
+      <input type="range" id="threshold" min="100" max="2000" step="50" value="500">
+      <div class="note" style="margin-top:8px;">
+        Порог — это не физика поражения, а условная дистанция для сортировки: "ближе к опасному объекту = выше в списке внимания". Подбирай на глаз, значение не откалибровано.
+      </div>
+    </div>
+
+    <div class="block">
+      <h3>Легенда</h3>
+      <div class="legend-item"><div class="swatch" style="background:var(--danger);"></div> Здание в зоне риска</div>
+      <div class="legend-item"><div class="swatch" style="background:#c94a3c; height:3px; border-radius:0;"></div> Опасная сторона здания</div>
+      <div class="legend-item"><div class="swatch" style="background:#8a8d5e;"></div> Здание вне зоны риска</div>
+      <div class="legend-item"><div class="swatch" style="background:#5a4634;"></div> Опасный объект (завод/военный/энергетика)</div>
+    </div>
+
+    <div class="block">
+      <button class="btn secondary" id="clearAll">Очистить всё</button>
+    </div>
+
+    <div class="note">
+      v0.01 ограничения: relation-геометрии (сложные многоугольники заводов) не разбираются, только way/node. "Опасная сторона" считается по азимуту от центроида здания — для П/Г-образных домов может ошибаться (см. обсуждение). Расстояние до объекта считается до ближайшего ребра его контура, не до точки на карте.
+    </div>
+
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script>
+// ---------- Карта ----------
+const map = L.map('map', { zoomControl: true }).setView([53.2521, 34.3717], 13);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap, &copy; CARTO',
+  maxZoom: 19
+}).addTo(map);
+
+let threatLayerGroup = L.layerGroup().addTo(map);
+let buildingLayerGroup = L.layerGroup().addTo(map);
+
+let threatFeatures = []; // { geom: turf feature (Point или LineString из контура), tags }
+let buildingFeatures = []; // { feature: turf Polygon, tags, layer refs }
+
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter'
+];
+
+const statusThreats = document.getElementById('statusThreats');
+const statusBuildings = document.getElementById('statusBuildings');
+const statBuildings = document.getElementById('statBuildings');
+const statDanger = document.getElementById('statDanger');
+const statThreats = document.getElementById('statThreats');
+const thresholdInput = document.getElementById('threshold');
+const thresholdVal = document.getElementById('thresholdVal');
+
+function setStatus(el, text, cls){
+  el.textContent = text;
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+function bboxOf(map){
+  const b = map.getBounds();
+  return `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+}
+
+// ---------- Overpass ----------
+async function runOverpass(query){
+  const errors = [];
+  for (const url of OVERPASS_MIRRORS){
+    try{
+      const res = await fetch(url, {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query)
+      });
+      if (!res.ok){
+        errors.push(`${url} -> HTTP ${res.status}`);
+        continue;
+      }
+      return await res.json();
+    } catch(e){
+      errors.push(`${url} -> ${e.message}`);
+    }
+  }
+  throw new Error('Все зеркала недоступны: ' + errors.join(' | ') +
+    '. Если открыл файл двойным кликом (file://) — попробуй через локальный сервер (python -m http.server) или проверь адблокер/расширения в браузере.');
+}
+
+function elementToGeoJSON(el){
+  if (el.type === 'node' && el.lat !== undefined){
+    return turf.point([el.lon, el.lat], { tags: el.tags || {} });
+  }
+  if (el.type === 'way' && el.geometry){
+    const coords = el.geometry.filter(p => p && p.lat !== undefined).map(p => [p.lon, p.lat]);
+    if (coords.length < 2) return null;
+    const first = coords[0], last = coords[coords.length - 1];
+    const isClosed = first[0] === last[0] && first[1] === last[1];
+    if (isClosed && coords.length >= 4){
+      try { return turf.polygon([coords], { tags: el.tags || {} }); }
+      catch(e){ return turf.lineString(coords, { tags: el.tags || {} }); }
+    }
+    return turf.lineString(coords, { tags: el.tags || {} });
+  }
+  return null; // relations пропускаем в v0.01
+}
+
+// ---------- 1. Загрузка опасных объектов ----------
+document.getElementById('loadThreats').addEventListener('click', async () => {
+  setStatus(statusThreats, 'Запрашиваю Overpass...', 'busy');
+  const bbox = bboxOf(map);
+  const q = `[out:json][timeout:60];
+(
+  way["landuse"="military"](${bbox});
+  way["military"](${bbox});
+  node["military"](${bbox});
+  way["man_made"="works"](${bbox});
+  way["landuse"="industrial"](${bbox});
+  way["power"="plant"](${bbox});
+  node["power"="plant"](${bbox});
+  way["power"="substation"](${bbox});
+  node["power"="substation"](${bbox});
+);
+out geom;`;
+  try{
+    const data = await runOverpass(q);
+    threatLayerGroup.clearLayers();
+    threatFeatures = [];
+
+    data.elements.forEach(el => {
+      const f = elementToGeoJSON(el);
+      if (!f) return;
+
+      // для расчёта расстояния полигон превращаем в контур (линию)
+      let distGeom = f;
+      if (f.geometry.type === 'Polygon'){
+        try { distGeom = turf.polygonToLine(f); } catch(e){ distGeom = f; }
+      }
+      threatFeatures.push({ geom: distGeom, tags: el.tags || {} });
+
+      const name = (el.tags && (el.tags.name || el.tags.man_made || el.tags.military || el.tags.power || el.tags.landuse)) || 'объект';
+      const style = { color: '#5a4634', weight: 2, fillColor: '#5a4634', fillOpacity: 0.35 };
+      const lyr = L.geoJSON(f, { style, pointToLayer: (feat, latlng) => L.circleMarker(latlng, { radius: 6, ...style }) });
+      lyr.bindPopup(`<b>${name}</b><br>${JSON.stringify(el.tags || {}, null, 0).slice(0,200)}`);
+      lyr.addTo(threatLayerGroup);
+    });
+
+    statThreats.textContent = threatFeatures.length;
+    setStatus(statusThreats, `Загружено объектов: ${threatFeatures.length}`, '');
+    recomputeRisk();
+  } catch(e){
+    setStatus(statusThreats, 'Ошибка: ' + e.message, 'error');
+  }
+});
+
+// ---------- 2. Загрузка зданий ----------
+document.getElementById('loadBuildings').addEventListener('click', async () => {
+  const bbox = bboxOf(map);
+  const b = map.getBounds();
+  const areaKm2 = turf.area(turf.bboxPolygon([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()])) / 1e6;
+  if (areaKm2 > 15){
+    setStatus(statusBuildings, `Область ~${areaKm2.toFixed(1)} км² — приблизьте карту (рекомендуется < 15 км²), иначе Overpass может оборвать запрос.`, 'error');
+    return;
+  }
+  setStatus(statusBuildings, 'Запрашиваю Overpass...', 'busy');
+  const q = `[out:json][timeout:60];
+(
+  way["building"](${bbox});
+);
+out geom;`;
+  try{
+    const data = await runOverpass(q);
+    buildingLayerGroup.clearLayers();
+    buildingFeatures = [];
+
+    data.elements.forEach(el => {
+      const f = elementToGeoJSON(el);
+      if (!f || f.geometry.type !== 'Polygon') return;
+      buildingFeatures.push({ feature: f, tags: el.tags || {}, layer: null, edgeLayer: null });
+    });
+
+    statBuildings.textContent = buildingFeatures.length;
+    setStatus(statusBuildings, `Загружено зданий: ${buildingFeatures.length}`, '');
+    recomputeRisk();
+  } catch(e){
+    setStatus(statusBuildings, 'Ошибка: ' + e.message, 'error');
+  }
+});
+
+// ---------- 3. Расчёт риска + опасной стороны ----------
+function findDangerousEdge(polygonFeature, threatPoint){
+  const centroid = turf.centroid(polygonFeature);
+  const bearingToThreat = turf.bearing(centroid, threatPoint);
+  const coords = polygonFeature.geometry.coordinates[0];
+
+  let bestEdge = null, bestDiff = Infinity;
+  for (let i = 0; i < coords.length - 1; i++){
+    const p1 = coords[i], p2 = coords[i+1];
+    const mid = turf.midpoint(turf.point(p1), turf.point(p2));
+    let edgeBearing = turf.bearing(centroid, mid);
+    let diff = Math.abs(edgeBearing - bearingToThreat);
+    if (diff > 180) diff = 360 - diff;
+    if (diff < bestDiff){ bestDiff = diff; bestEdge = turf.lineString([p1, p2]); }
+  }
+  return bestEdge;
+}
+
+function recomputeRisk(){
+  if (!buildingFeatures.length || !threatFeatures.length) return;
+
+  buildingLayerGroup.clearLayers();
+  const thresholdM = parseInt(thresholdInput.value, 10);
+  let dangerCount = 0;
+
+  buildingFeatures.forEach(b => {
+    const centroid = turf.centroid(b.feature);
+
+    let minDist = Infinity, nearestPoint = null;
+    threatFeatures.forEach(t => {
+      let d, np;
+      if (t.geom.geometry.type === 'Point'){
+        d = turf.distance(centroid, t.geom, { units: 'meters' });
+        np = t.geom;
+      } else {
+        d = turf.pointToLineDistance(centroid, t.geom, { units: 'meters' });
+        np = turf.nearestPointOnLine(t.geom, centroid);
+      }
+      if (d < minDist){ minDist = d; nearestPoint = np; }
+    });
+
+    const isDanger = minDist <= thresholdM;
+    if (isDanger) dangerCount++;
+
+    const style = isDanger
+      ? { color: '#c94a3c', weight: 1, fillColor: '#c94a3c', fillOpacity: 0.45 }
+      : { color: '#8a8d5e', weight: 1, fillColor: '#8a8d5e', fillOpacity: 0.25 };
+
+    const name = b.tags.name || b.tags['addr:street'] ? `${b.tags['addr:street']||''} ${b.tags['addr:housenumber']||''}`.trim() : 'здание';
+    const lyr = L.geoJSON(b.feature, { style });
+    lyr.bindPopup(`<b>${name || 'здание'}</b><br>до ближайшего объекта: ${minDist.toFixed(0)} м`);
+    lyr.addTo(buildingLayerGroup);
+
+    if (isDanger && nearestPoint){
+      const edge = findDangerousEdge(b.feature, nearestPoint);
+      if (edge){
+        L.geoJSON(edge, { style: { color: '#ff5a45', weight: 4 } }).addTo(buildingLayerGroup);
+      }
+    }
+  });
+
+  statDanger.textContent = dangerCount;
+}
+
+thresholdInput.addEventListener('input', () => {
+  thresholdVal.textContent = thresholdInput.value + ' м';
+  recomputeRisk();
+});
+
+document.getElementById('clearAll').addEventListener('click', () => {
+  threatLayerGroup.clearLayers();
+  buildingLayerGroup.clearLayers();
+  threatFeatures = [];
+  buildingFeatures = [];
+  statBuildings.textContent = '0';
+  statDanger.textContent = '0';
+  statThreats.textContent = '0';
+  setStatus(statusThreats, '', '');
+  setStatus(statusBuildings, '', '');
+});
+</script>
+</body>
+</html>
