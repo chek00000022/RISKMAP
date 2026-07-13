@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Экспозиция дома БПЛА — v0.01 (тест)</title>
+<title>Экспозиция дома БПЛА — v0.02 (точная граница)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -68,7 +68,7 @@
   <div id="map"></div>
   <div id="panel">
     <div>
-      <h1 style="font-size:22px;">ЭКСПОЗИЦИЯ БПЛА <span style="color:var(--text-dim);font-size:14px;">v0.01 test</span></h1>
+      <h1 style="font-size:22px;">ЭКСПОЗИЦИЯ БПЛА <span style="color:var(--text-dim);font-size:14px;">v0.02</span></h1>
       <div class="small">Геометрическая эвристика открытости/экранирования здания в направлении госграницы. Не прогноз. Действуйте по инструкциям РСЧС.</div>
     </div>
 
@@ -125,11 +125,12 @@
       <div class="legend-item"><span class="dot" style="background:#ffb020"></span> Промышленность / энергетика</div>
       <div class="legend-item"><span class="dot" style="background:#8ecae6"></span> Ж/д узел</div>
       <div class="legend-item"><span class="dot" style="background:#6aa0ff"></span> Больница/школа (справочно)</div>
-      <div class="legend-item"><span class="dot" style="background:#ffe066"></span> Линия госграницы (ориентировочно)</div>
+      <div class="legend-item"><span class="dot" style="background:#ffe066"></span> Линия госграницы (OSM, авто)</div>
+      <button id="btnBorderRefresh" style="margin-top:8px;width:100%;">🔄 Обновить линию границы</button>
     </div>
 
     <div id="disclaimer">
-      ⚠ Линия границы в v0.01 задана вручную приблизительными точками — <b>для теста геометрии</b>, не для навигации. Точную линию нужно будет подтянуть из официальных источников/более точного набора OSM. Модель не учитывает РЭБ, манёвр БПЛА, погоду и тип боеприпаса. Ориентируйтесь на официальные инструкции РСЧС и сигналы ГО.
+      ⚠ Линия границы теперь загружается из OSM автоматически (way admin_level=2 в заданном bbox). Возможны неточности: генерализация геометрии в OSM, и в северо-западном углу зоны — вероятная примесь короткого участка границы РФ/Беларусь у стыка границ (отфильтровано эвристически, не гарантированно точно — если что-то выглядит странно, жми «Обновить линию границы» и сверяйся визуально на карте). Модель не учитывает РЭБ, манёвр БПЛА, погоду и тип боеприпаса. Ориентируйтесь на официальные инструкции РСЧС и сигналы ГО.
     </div>
 
     <div class="block">
@@ -145,10 +146,9 @@
    КОНФИГ
    ============================================================ */
 
-// Приблизительная линия госграницы РФ/Украина в зоне Брянской/Черниговской/Сумской областей.
-// TODO v0.02: заменить точным извлечением boundary=administrative;admin_level=2 через Overpass
-// и обрезкой по релевантному bbox. Сейчас это ручной набор точек для теста геометрии сектора.
-const BORDER_POINTS = [
+// Резервный (fallback) набор точек границы — используется только если не удалось получить
+// точную линию из OSM. Основной источник — fetchBorderLine() ниже, запрос admin_level=2.
+const BORDER_POINTS_FALLBACK = [
   [52.90, 31.75],
   [52.68, 31.80],
   [52.45, 31.95],
@@ -162,6 +162,14 @@ const BORDER_POINTS = [
   [51.00, 34.65],
   [50.85, 35.00]
 ];
+
+// bbox для запроса точной линии: [south, west, north, east].
+// Подобран так, чтобы захватить участок РФ/Украина рядом с Брянской и Смоленской областями,
+// и по возможности не заходить далеко на север/запад, где начинается стык с границей РФ/Беларусь.
+const BORDER_BBOX = [50.3, 30.8, 53.3, 36.0];
+
+let BORDER_POINTS = BORDER_POINTS_FALLBACK; // заменяется результатом fetchBorderLine() при загрузке
+let BORDER_LINES_FOR_DRAW = [BORDER_POINTS_FALLBACK];
 
 const HAZARD_CATEGORIES = {
   military:   {label:'Военный объект',        radius:3000, color:'#ff4d4d'},
@@ -207,12 +215,6 @@ function initMap(){
   civilLayer = L.layerGroup().addTo(map);
   raysLayer = L.layerGroup().addTo(map);
   borderLayer = L.layerGroup().addTo(map);
-
-  // рисуем ориентировочную линию границы сразу
-  const latlngs = BORDER_POINTS.map(p=>[p[0],p[1]]);
-  L.polyline(latlngs, {color:'#ffe066', weight:2, dashArray:'6,6', opacity:.8})
-    .bindTooltip('Госграница (ориентировочно, тест)', {sticky:true})
-    .addTo(borderLayer);
 
   map.on('click', onMapClick);
 }
@@ -303,6 +305,60 @@ function civilQL(lat, lon, r){
   way["amenity"="kindergarten"](around:${r},${lat},${lon});
 );
 out center tags;`;
+}
+
+async function fetchBorderLine(){
+  log('Загружаю линию госграницы из OSM (admin_level=2)...');
+  const [s, w, n, e] = BORDER_BBOX;
+  const q = `[out:json][timeout:60];
+way["boundary"="administrative"]["admin_level"="2"](${s},${w},${n},${e});
+out geom;`;
+  try{
+    const data = await overpassQuery(q);
+    const ways = (data.elements||[]).filter(el=>el.type==='way' && el.geometry && el.geometry.length>1);
+    if(ways.length === 0) throw new Error('пустой ответ (в этом bbox нет тегированных way admin_level=2)');
+
+    let flatPts = [];
+    const lines = [];
+    ways.forEach(wy=>{
+      const coords = wy.geometry.map(g=>[g.lon, g.lat]); // turf ждёт [lon,lat]
+      let simplifiedCoords = coords;
+      try{
+        const line = turf.lineString(coords);
+        const simplified = turf.simplify(line, {tolerance:0.008, highQuality:false});
+        simplifiedCoords = simplified.geometry.coordinates;
+      }catch(err){ /* если упростить не вышло — используем исходные точки way */ }
+      const latlon = simplifiedCoords.map(c=>[c[1], c[0]]);
+      lines.push(latlon);
+      flatPts.push(...latlon);
+    });
+
+    // грубый эвристический фильтр угла bbox, где вероятна примесь границы РФ/Беларусь
+    // (стык границ РФ/Украина/Беларусь). Не гарантированно точен — см. дисклеймер в UI.
+    flatPts = flatPts.filter(p => !(p[0] > 52.6 && p[1] < 31.6));
+    if(flatPts.length < 5) throw new Error('слишком мало точек после фильтрации');
+
+    BORDER_POINTS = flatPts;
+    BORDER_LINES_FOR_DRAW = lines;
+    log(`Линия границы загружена: ${ways.length} сегмент(ов) OSM, ${flatPts.length} точек после упрощения.`);
+    drawBorder('Госграница РФ/Украина (OSM admin_level=2, авто)', '#ffe066');
+    return true;
+  }catch(err){
+    log(`⚠ Не удалось загрузить точную линию границы (${err.message}). Использую резервный набор точек.`);
+    BORDER_POINTS = BORDER_POINTS_FALLBACK;
+    BORDER_LINES_FOR_DRAW = [BORDER_POINTS_FALLBACK];
+    drawBorder('Резервная линия границы (приблизительно)', '#ff9e3d');
+    return false;
+  }
+}
+
+function drawBorder(label, color){
+  borderLayer.clearLayers();
+  BORDER_LINES_FOR_DRAW.forEach((line, i)=>{
+    L.polyline(line, {color, weight:2, dashArray:'6,6', opacity:.85})
+      .bindTooltip(i===0 ? label : undefined, {sticky:true})
+      .addTo(borderLayer);
+  });
 }
 
 function classifyHazard(tags){
@@ -491,8 +547,12 @@ async function runCalculation(){
     if(useElevation){
       log('Запрашиваю рельеф (open-elevation)...');
       const allPts = [{lat:housePoint.lat, lon:housePoint.lon}];
-      BORDER_POINTS.forEach(p=>allPts.push({lat:p[0], lon:p[1]}));
-      rays.forEach(r=> r.samples.forEach(s=>allPts.push({lat:s.lat, lon:s.lon})));
+      const seenFar = new Set();
+      rays.forEach(r=>{
+        const k = r.farLat.toFixed(4) + ',' + r.farLon.toFixed(4);
+        if(!seenFar.has(k)){ seenFar.add(k); allPts.push({lat:r.farLat, lon:r.farLon}); }
+        r.samples.forEach(s=>allPts.push({lat:s.lat, lon:s.lon}));
+      });
       await fetchElevationBatch(allPts);
     }
 
@@ -624,7 +684,14 @@ function renderHazardRisk(hazards){
   });
 }
 
+document.getElementById('btnBorderRefresh').addEventListener('click', ()=>{
+  document.getElementById('btnBorderRefresh').disabled = true;
+  fetchBorderLine().finally(()=>{ document.getElementById('btnBorderRefresh').disabled = false; });
+});
+
 initMap();
+drawBorder('Резервная линия (идёт загрузка точной...)', '#555555');
+fetchBorderLine();
 </script>
 </body>
 </html>
