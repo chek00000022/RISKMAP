@@ -232,25 +232,35 @@ function bboxOf(map){
 }
 
 // ---------- Overpass ----------
-async function runOverpass(query){
+async function runOverpass(query, onProgress){
   const errors = [];
-  for (const url of OVERPASS_MIRRORS){
+  for (let i = 0; i < OVERPASS_MIRRORS.length; i++){
+    const url = OVERPASS_MIRRORS[i];
+    const host = url.replace('https://','').split('/')[0];
+    if (onProgress) onProgress(`Зеркало ${i+1}/${OVERPASS_MIRRORS.length} (${host})...`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     try{
       const res = await fetch(url, {
         method: 'POST',
-        body: 'data=' + encodeURIComponent(query)
+        body: 'data=' + encodeURIComponent(query),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       if (!res.ok){
-        errors.push(`${url} -> HTTP ${res.status}`);
+        errors.push(`${host} -> HTTP ${res.status}`);
         continue;
       }
       return await res.json();
     } catch(e){
-      errors.push(`${url} -> ${e.message}`);
+      clearTimeout(timeoutId);
+      const msg = e.name === 'AbortError' ? 'таймаут 25с' : e.message;
+      errors.push(`${host} -> ${msg}`);
     }
   }
-  throw new Error('Все зеркала недоступны: ' + errors.join(' | ') +
-    '. Если открыл файл двойным кликом (file://) — попробуй через локальный сервер (python -m http.server) или проверь адблокер/расширения в браузере.');
+  throw new Error('Все зеркала недоступны (' + errors.join(' | ') +
+    '). Overpass — общий бесплатный сервис, под нагрузкой может лежать. Попробуй через минуту или уменьши область карты.');
 }
 
 function elementToGeoJSON(el){
@@ -289,7 +299,7 @@ document.getElementById('loadThreats').addEventListener('click', async () => {
 );
 out geom;`;
   try{
-    const data = await runOverpass(q);
+    const data = await runOverpass(q, (msg) => setStatus(statusThreats, msg, 'busy'));
     threatLayerGroup.clearLayers();
     threatFeatures = [];
 
@@ -335,7 +345,7 @@ document.getElementById('loadBuildings').addEventListener('click', async () => {
 );
 out geom;`;
   try{
-    const data = await runOverpass(q);
+    const data = await runOverpass(q, (msg) => setStatus(statusBuildings, msg, 'busy'));
     buildingLayerGroup.clearLayers();
     buildingFeatures = [];
 
@@ -359,16 +369,29 @@ function findDangerousEdge(polygonFeature, threatPoint){
   const bearingToThreat = turf.bearing(centroid, threatPoint);
   const coords = polygonFeature.geometry.coordinates[0];
 
-  let bestEdge = null, bestDiff = Infinity;
+  const candidates = [];
   for (let i = 0; i < coords.length - 1; i++){
     const p1 = coords[i], p2 = coords[i+1];
+    const segLen = turf.distance(turf.point(p1), turf.point(p2), { units: 'meters' });
+    if (segLen < 1.5) continue; // отсекаем микро-рёбра — обычно шум геометрии OSM, не реальная стена
+
     const mid = turf.midpoint(turf.point(p1), turf.point(p2));
     let edgeBearing = turf.bearing(centroid, mid);
     let diff = Math.abs(edgeBearing - bearingToThreat);
     if (diff > 180) diff = 360 - diff;
-    if (diff < bestDiff){ bestDiff = diff; bestEdge = turf.lineString([p1, p2]); }
+    candidates.push({ p1, p2, diff, segLen });
   }
-  return bestEdge;
+  if (!candidates.length) return null;
+
+  // приоритет: сперва минимальный угол до направления на угрозу,
+  // при близких углах (в пределах 8°) — более длинное (более реальное) ребро
+  candidates.sort((a, b) => {
+    if (Math.abs(a.diff - b.diff) > 8) return a.diff - b.diff;
+    return b.segLen - a.segLen;
+  });
+
+  const best = candidates[0];
+  return turf.lineString([best.p1, best.p2]);
 }
 
 function recomputeRisk(){
