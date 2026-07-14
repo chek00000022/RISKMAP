@@ -2,724 +2,471 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Экспозиция дома БПЛА — v0.03 (зеркала Overpass)</title>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Оценка открытости дома — эвристика по открытым данным OSM</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
-    --bg:#0a0e0a;
-    --panel:#10150f;
-    --panel-2:#161d14;
-    --border:#26331f;
-    --text:#d7e6d2;
-    --text-dim:#7f9377;
-    --safe:#3ddc84;
-    --warn:#ffb020;
-    --danger:#ff4d4d;
-    --accent:#8ecae6;
+    --bg:#0f1419; --panel:#1a2129; --panel2:#212a34; --text:#e8edf2;
+    --muted:#9aa7b3; --accent:#4da3ff; --warn:#ffb020; --danger:#ff5b5b; --ok:#3ecf8e;
+    --border:#2c3844;
   }
-  *{box-sizing:border-box;}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
-    font-family:'Share Tech Mono',monospace;}
-  h1,h2,h3{font-family:'Bebas Neue',sans-serif;letter-spacing:.05em;margin:0 0 8px;color:#fff;}
-  #app{display:flex;height:100vh;width:100vw;overflow:hidden;}
-  #map{flex:1;background:#050705;}
-  #panel{width:380px;min-width:340px;background:var(--panel);border-left:1px solid var(--border);
-    overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;}
-  .block{background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:12px;}
-  .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap;}
-  label{font-size:12px;color:var(--text-dim);display:block;margin-bottom:3px;}
-  input[type=number],input[type=text]{
-    background:#0d120c;border:1px solid var(--border);color:var(--text);
-    padding:5px 6px;border-radius:3px;font-family:'Share Tech Mono',monospace;width:90px;font-size:13px;}
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif; background:var(--bg); color:var(--text);}
+  #app{display:flex; flex-direction:column; height:100%;}
+
+  /* ---------- ДИСКЛЕЙМЕР ---------- */
+  .disclaimer{
+    background:linear-gradient(90deg,#3a2410,#40200f);
+    border-bottom:2px solid var(--warn);
+    padding:10px 14px; font-size:13px; line-height:1.45;
+  }
+  .disclaimer b{color:var(--warn);}
+  .disclaimer .official{color:#ffd9a0;}
+
+  /* ---------- LAYOUT ---------- */
+  .main{flex:1; display:flex; min-height:0;}
+  #map{flex:1; min-height:0; z-index:1;}
+  .sidebar{
+    width:360px; max-width:45%; background:var(--panel);
+    border-left:1px solid var(--border); overflow-y:auto; padding:12px;
+    display:flex; flex-direction:column; gap:10px;
+  }
+  @media (max-width:760px){
+    .main{flex-direction:column;}
+    #map{height:46vh; flex:none;}
+    .sidebar{width:100%; max-width:100%; flex:1; border-left:none; border-top:1px solid var(--border);}
+  }
+
+  h1{font-size:15px; padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--border);}
+  h1 span{color:var(--muted); font-weight:normal; font-size:12px;}
+  h2{font-size:13px; color:var(--accent); text-transform:uppercase; letter-spacing:.5px;}
+
+  .card{background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px;}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
   button{
-    background:#1a2416;border:1px solid #3a5030;color:var(--safe);
-    padding:8px 12px;border-radius:3px;cursor:pointer;font-family:'Share Tech Mono',monospace;
-    font-size:13px;letter-spacing:.03em;transition:.15s;}
-  button:hover{background:#233420;border-color:var(--safe);}
-  button.primary{background:#183020;border-color:var(--safe);color:#eafff0;font-weight:bold;}
-  button.active{outline:2px solid var(--warn);}
-  button:disabled{opacity:.4;cursor:not-allowed;}
-  .small{font-size:11px;color:var(--text-dim);line-height:1.5;}
-  .metric{display:flex;justify-content:space-between;align-items:baseline;margin:6px 0;}
-  .metric .val{font-size:26px;font-family:'Bebas Neue',sans-serif;}
-  .val.safe{color:var(--safe);} .val.warn{color:var(--warn);} .val.danger{color:var(--danger);}
-  .badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;margin-left:6px;}
-  .badge.approx{background:#3a2a10;color:var(--warn);border:1px solid #5a4020;}
-  progress{width:100%;height:8px;accent-color:var(--safe);}
-  details summary{cursor:pointer;color:var(--accent);font-size:12px;margin-bottom:6px;}
-  #log{font-size:11px;color:var(--text-dim);max-height:110px;overflow-y:auto;white-space:pre-wrap;
-    border-top:1px solid var(--border);padding-top:6px;margin-top:6px;}
-  .legend-item{display:flex;align-items:center;gap:6px;font-size:11px;margin:3px 0;}
-  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;}
-  .hazard-list{max-height:150px;overflow-y:auto;font-size:11px;}
-  .hazard-list div{padding:3px 0;border-bottom:1px solid var(--border);}
-  #disclaimer{font-size:11px;color:var(--warn);border:1px solid #4a3510;background:#1a1408;
-    padding:8px;border-radius:4px;line-height:1.5;}
-  a{color:var(--accent);}
+    background:var(--accent); color:#08121c; border:none; border-radius:8px;
+    padding:10px 14px; font-size:14px; font-weight:600; cursor:pointer; flex:1;
+  }
+  button.secondary{background:#33414f; color:var(--text);}
+  button:disabled{opacity:.5; cursor:not-allowed;}
+  input[type=number]{
+    width:80px; background:#101820; color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px; font-size:14px;
+  }
+  label{font-size:13px; color:var(--muted);}
+  .hint{font-size:12px; color:var(--muted); line-height:1.4;}
+  .status{font-size:13px; color:var(--warn); min-height:16px;}
+
+  /* ---------- РЕЗУЛЬТАТ ---------- */
+  .gauge{display:flex; align-items:baseline; gap:10px;}
+  .gauge .num{font-size:38px; font-weight:800;}
+  .gauge .cat{font-size:15px; font-weight:700;}
+  .bar{height:10px; border-radius:6px; background:#101820; overflow:hidden;}
+  .bar > div{height:100%; border-radius:6px; transition:width .6s;}
+  .low{color:var(--ok);} .mid{color:var(--warn);} .high{color:var(--danger);}
+  .factors{display:flex; flex-direction:column; gap:6px; font-size:13px;}
+  .factor{display:flex; justify-content:space-between; gap:8px; padding:6px 8px; background:#101820; border-radius:6px;}
+  .factor .val{font-weight:700; white-space:nowrap;}
+  .objects li{font-size:12px; color:var(--muted); margin-left:16px; line-height:1.5;}
+  .legend{font-size:12px; color:var(--muted); line-height:1.6;}
+  .legend i{display:inline-block; width:18px; height:4px; border-radius:2px; margin-right:6px; vertical-align:middle;}
+  .footer-note{font-size:11px; color:#6d7a86; line-height:1.5;}
+  .safety{
+    background:#33200f; border:1px solid var(--warn); border-radius:10px;
+    padding:10px 12px; font-size:13px; line-height:1.5;
+  }
+  .safety b{color:var(--warn);}
+  .loader{display:inline-block; width:14px; height:14px; border:2px solid var(--muted); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle;}
+  @keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="map"></div>
-  <div id="panel">
-    <div>
-      <h1 style="font-size:22px;">ЭКСПОЗИЦИЯ БПЛА <span style="color:var(--text-dim);font-size:14px;">v0.03</span></h1>
-      <div class="small">Геометрическая эвристика открытости/экранирования здания в направлении госграницы. Не прогноз. Действуйте по инструкциям РСЧС.</div>
-    </div>
 
-    <div class="block">
-      <h3>1. Точка дома</h3>
-      <button id="btnPlace">📍 Указать на карте</button>
-      <div class="row" style="margin-top:8px;">
-        <div><label>Широта</label><input type="text" id="lat" placeholder="53.2521"></div>
-        <div><label>Долгота</label><input type="text" id="lon" placeholder="34.3717"></div>
+  <h1>🏠 Открытость дома для БПЛА с направления границы <span>· грубая эвристика · Брянская / Смоленская обл. и приграничье</span></h1>
+
+  <div class="disclaimer">
+    ⚠️ <b>Это грубая эвристическая оценка по открытым данным (OSM, рельеф). НЕ является прогнозом.</b>
+    <span class="official">При сигнале тревоги — следуйте официальным инструкциям: отойти от окон,
+    укрыться в помещении без остекления, подвале, за капитальными стенами.</span>
+    Сервис лишь визуализирует географическую «открытость» дома со стороны государственной границы и близость к объектам,
+    рядом с которыми фиксировались инциденты. Реальная траектория БПЛА непредсказуема.
+  </div>
+
+  <div class="main">
+    <div id="map"></div>
+
+    <div class="sidebar">
+      <div class="card">
+        <h2>1. Выбор дома</h2>
+        <div class="row">
+          <button id="btnGeo">📍 Моё местоположение</button>
+        </div>
+        <div class="hint">…или просто <b>кликните по своему дому на карте</b>. Точку можно переставлять.</div>
+        <div class="status" id="pointStatus">Точка не выбрана</div>
       </div>
-      <div class="row">
-        <div><label>Высота дома, м</label><input type="number" id="houseHeight" value="8" min="2" max="60"></div>
-        <div class="small" style="max-width:180px;">если кликнули по контуру здания OSM — высота подставится автоматически</div>
+
+      <div class="card">
+        <h2>2. Параметры здания</h2>
+        <div class="row">
+          <label for="floors">Этажей в здании:</label>
+          <input type="number" id="floors" min="1" max="40" value="2">
+        </div>
+        <div class="hint" id="floorsHint">Высота подтягивается из тэгов OSM (height / building:levels). Если данных нет — укажите этажность вручную (1 этаж ≈ 2,5 м).</div>
+        <div class="row">
+          <button id="btnCalc" disabled>▶ Рассчитать открытость</button>
+        </div>
+        <div class="status" id="calcStatus"></div>
       </div>
-    </div>
 
-    <div class="block">
-      <details>
-        <summary>2. Параметры расчёта (можно не трогать)</summary>
-        <div class="row"><div><label>Шаг луча, °</label><input type="number" id="rayStep" value="3" min="1" max="10"></div>
-          <div><label>Шаг точки, м</label><input type="number" id="sampleStep" value="50" min="10" max="200"></div></div>
-        <div class="row"><div><label>Радиус проверки препятствий, м</label><input type="number" id="maxRay" value="1000" min="200" max="2000"></div></div>
-        <div class="row"><div><label>Радиус поиска зданий/объектов, м</label><input type="number" id="searchRadius" value="1500" min="500" max="5000"></div></div>
-        <div class="row"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="useElevation" checked style="width:auto;"> учитывать рельеф (open-elevation API)</label></div>
-      </details>
-    </div>
-
-    <button class="primary" id="btnCalc" disabled>▶ РАССЧИТАТЬ</button>
-
-    <div class="block" id="resultsBlock" style="display:none;">
-      <h3>Результат</h3>
-      <div class="metric">
-        <span>Экспозиция по траектории<span class="badge approx">эвристика</span></span>
-        <span class="val" id="valExposure">—</span>
+      <div class="card" id="resultCard" style="display:none">
+        <h2>3. Результат (эвристический индекс)</h2>
+        <div class="gauge">
+          <div class="num" id="scoreNum">—</div>
+          <div class="cat" id="scoreCat"></div>
+        </div>
+        <div class="bar"><div id="scoreBar" style="width:0%"></div></div>
+        <div class="hint">Индекс 0–100. Это <b>не вероятность</b> в математическом смысле, а условная сумма факторов открытости.</div>
+        <div class="factors" id="factors"></div>
+        <div>
+          <h2 style="margin-top:6px">Опасные объекты рядом (OSM)</h2>
+          <ul class="objects" id="objectsList"><li>—</li></ul>
+        </div>
+        <div class="legend">
+          <div><i style="background:var(--danger)"></i>Луч со стороны границы: направление открыто (поле / низкая застройка / дом на возвышении)</div>
+          <div><i style="background:var(--ok)"></i>Луч перекрыт (застройка / рельеф прикрывает дом)</div>
+          <div><i style="background:var(--warn)"></i>Частично открыто</div>
+        </div>
       </div>
-      <div class="small" id="exposureNote"></div>
-      <div class="metric" style="margin-top:10px;">
-        <span>Риск близости объектов</span>
-        <span class="val" id="valHazard">—</span>
+
+      <div class="safety">
+        <b>Если слышите БПЛА / объявлена тревога:</b><br>
+        • отойдите от окон, не снимайте на телефон у окна;<br>
+        • перейдите в помещение без остекления (коридор, ванная, подвал);<br>
+        • укройтесь за двумя капитальными стенами от внешней стороны здания;<br>
+        • следуйте инструкциям МЧС и официальных каналов региона.
       </div>
-      <div class="small" id="hazardNote"></div>
-    </div>
 
-    <div class="block" id="hazardListBlock" style="display:none;">
-      <h3>Объекты рядом (OSM)</h3>
-      <div class="hazard-list" id="hazardList"></div>
-    </div>
-
-    <div class="block">
-      <h3>Легенда</h3>
-      <div class="legend-item"><span class="dot" style="background:var(--safe)"></span> Луч не заблокирован</div>
-      <div class="legend-item"><span class="dot" style="background:var(--danger)"></span> Луч заблокирован (экран)</div>
-      <div class="legend-item"><span class="dot" style="background:#ff4d4d"></span> Военный объект</div>
-      <div class="legend-item"><span class="dot" style="background:#ffb020"></span> Промышленность / энергетика</div>
-      <div class="legend-item"><span class="dot" style="background:#8ecae6"></span> Ж/д узел</div>
-      <div class="legend-item"><span class="dot" style="background:#6aa0ff"></span> Больница/школа (справочно)</div>
-      <div class="legend-item"><span class="dot" style="background:#ffe066"></span> Линия госграницы (OSM, авто)</div>
-      <button id="btnBorderRefresh" style="margin-top:8px;width:100%;">🔄 Обновить линию границы</button>
-    </div>
-
-    <div id="disclaimer">
-      ⚠ Линия границы теперь загружается из OSM автоматически (way admin_level=2 в заданном bbox). Возможны неточности: генерализация геометрии в OSM, и в северо-западном углу зоны — вероятная примесь короткого участка границы РФ/Беларусь у стыка границ (отфильтровано эвристически, не гарантированно точно — если что-то выглядит странно, жми «Обновить линию границы» и сверяйся визуально на карте). Модель не учитывает РЭБ, манёвр БПЛА, погоду и тип боеприпаса. Ориентируйтесь на официальные инструкции РСЧС и сигналы ГО.
-    </div>
-
-    <div class="block">
-      <div id="log"></div>
+      <div class="footer-note">
+        Источники: © OpenStreetMap contributors (Overpass API), рельеф — Open-Meteo Elevation (Copernicus DEM).
+        Расчёт полностью в браузере, координаты никуда не сохраняются. Сравнивайте результат со здравым смыслом
+        и реальными инцидентами в вашей местности — модель заведомо упрощена.
+      </div>
     </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
 <script>
-/* ============================================================
-   КОНФИГ
-   ============================================================ */
+"use strict";
 
-// Резервный (fallback) набор точек границы — используется только если не удалось получить
-// точную линию из OSM. Основной источник — fetchBorderLine() ниже, запрос admin_level=2.
-const BORDER_POINTS_FALLBACK = [
-  [52.90, 31.75],
-  [52.68, 31.80],
-  [52.45, 31.95],
-  [52.20, 32.20],
-  [52.00, 32.45],
-  [51.80, 32.80],
-  [51.62, 33.15],
-  [51.45, 33.55],
-  [51.30, 33.95],
-  [51.15, 34.30],
-  [51.00, 34.65],
-  [50.85, 35.00]
+/* ================= КАРТА ================= */
+const map = L.map('map').setView([53.25, 34.37], 8); // Брянск по умолчанию
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+
+let houseMarker = null;
+let rayLayer = L.layerGroup().addTo(map);
+let objLayer = L.layerGroup().addTo(map);
+let housePoint = null;
+
+const $ = id => document.getElementById(id);
+
+/* Опорные точки границы РФ—Украина (грубая полилиния, для определения направления лучей) */
+const BORDER_PTS = [
+  [52.35, 31.60],[52.10, 32.30],[52.28, 33.10],[52.05, 33.80],
+  [51.60, 34.20],[51.25, 34.35],[50.85, 35.10],[50.40, 35.60],
+  [50.05, 36.40],[49.95, 37.40],[49.60, 38.00]
 ];
 
-// bbox для запроса точной линии: [south, west, north, east].
-// Подобран так, чтобы захватить участок РФ/Украина рядом с Брянской и Смоленской областями,
-// и по возможности не заходить далеко на север/запад, где начинается стык с границей РФ/Беларусь.
-const BORDER_BBOX = [50.3, 30.8, 53.3, 36.0];
+/* ================= ГЕО-УТИЛИТЫ ================= */
+const R = 6371000;
+const rad = d => d*Math.PI/180, deg = r => r*180/Math.PI;
 
-let BORDER_POINTS = BORDER_POINTS_FALLBACK; // заменяется результатом fetchBorderLine() при загрузке
-let BORDER_LINES_FOR_DRAW = [BORDER_POINTS_FALLBACK];
-
-const HAZARD_CATEGORIES = {
-  military:   {label:'Военный объект',        radius:3000, color:'#ff4d4d'},
-  industrial: {label:'Промышленность/завод',   radius:1500, color:'#ffb020'},
-  power_plant:{label:'Электростанция',         radius:2000, color:'#ffb020'},
-  substation: {label:'Подстанция',             radius:800,  color:'#ffd166'},
-  oilgas:     {label:'Нефть/газ объект',       radius:1000, color:'#ff8c42'},
-  rail:       {label:'Ж/д узел',               radius:800,  color:'#8ecae6'}
-};
-const CIVIL_COLOR = '#6aa0ff';
-
-// Список зеркал Overpass API — пробуем по очереди, при таймауте/ошибке переключаемся дальше.
-// Российское зеркало первым: у overpass-api.de (Германия) бывают перегрузки/504,
-// и маршрутизация из РФ к нему может быть менее стабильной.
-const OVERPASS_MIRRORS = [
-  'https://overpass.openstreetmap.ru/api/interpreter',
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter'
-];
-const ELEVATION_URL = 'https://api.open-elevation.com/api/v1/lookup';
-
-/* ============================================================
-   СОСТОЯНИЕ
-   ============================================================ */
-let map, houseMarker, placingMode = false;
-let housePoint = null;       // {lat, lon}
-let houseBuildingHeight = null;
-let buildingsLayer, hazardsLayer, civilLayer, raysLayer, borderLayer;
-let buildingsData = [];      // [{polygon: turf polygon, height}]
-let elevationCache = {};     // "lat,lon" -> meters
-let borderElevCache = null;  // parallel array to BORDER_POINTS
-
-function log(msg){
-  const el = document.getElementById('log');
-  el.textContent += msg + '\n';
-  el.scrollTop = el.scrollHeight;
+function distM(a, b){
+  const dLat = rad(b[0]-a[0]), dLon = rad(b[1]-a[1]);
+  const s = Math.sin(dLat/2)**2 + Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+function bearing(a, b){
+  const y = Math.sin(rad(b[1]-a[1]))*Math.cos(rad(b[0]));
+  const x = Math.cos(rad(a[0]))*Math.sin(rad(b[0])) -
+            Math.sin(rad(a[0]))*Math.cos(rad(b[0]))*Math.cos(rad(b[1]-a[1]));
+  return (deg(Math.atan2(y,x))+360)%360;
+}
+function destPoint(p, brgDeg, dM){
+  const br = rad(brgDeg), lat1 = rad(p[0]), lon1 = rad(p[1]), dr = dM/R;
+  const lat2 = Math.asin(Math.sin(lat1)*Math.cos(dr)+Math.cos(lat1)*Math.sin(dr)*Math.cos(br));
+  const lon2 = lon1 + Math.atan2(Math.sin(br)*Math.sin(dr)*Math.cos(lat1),
+                                 Math.cos(dr)-Math.sin(lat1)*Math.sin(lat2));
+  return [deg(lat2), deg(lon2)];
 }
 
-/* ============================================================
-   КАРТА
-   ============================================================ */
-function initMap(){
-  map = L.map('map', {zoomControl:true}).setView([53.0, 33.5], 8);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom:19, attribution:'© OpenStreetMap contributors'
-  }).addTo(map);
-
-  buildingsLayer = L.layerGroup().addTo(map);
-  hazardsLayer = L.layerGroup().addTo(map);
-  civilLayer = L.layerGroup().addTo(map);
-  raysLayer = L.layerGroup().addTo(map);
-  borderLayer = L.layerGroup().addTo(map);
-
-  map.on('click', onMapClick);
+/* ================= ВЫБОР ТОЧКИ ================= */
+function setHouse(lat, lon){
+  housePoint = [lat, lon];
+  if (houseMarker) houseMarker.setLatLng(housePoint);
+  else houseMarker = L.marker(housePoint, {draggable:true}).addTo(map)
+        .on('dragend', e => setHouse(e.target.getLatLng().lat, e.target.getLatLng().lng));
+  $('pointStatus').textContent = `Точка: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  $('btnCalc').disabled = false;
 }
 
-function onMapClick(e){
-  if(!placingMode) return;
-  setHousePoint(e.latlng.lat, e.latlng.lng);
-  placingMode = false;
-  document.getElementById('btnPlace').classList.remove('active');
-}
+map.on('click', e => setHouse(e.latlng.lat, e.latlng.lng));
 
-function setHousePoint(lat, lon){
-  housePoint = {lat, lon};
-  document.getElementById('lat').value = lat.toFixed(6);
-  document.getElementById('lon').value = lon.toFixed(6);
-  if(houseMarker) map.removeLayer(houseMarker);
-  houseMarker = L.marker([lat, lon], {title:'Дом'}).addTo(map);
-  map.setView([lat, lon], 15);
-  document.getElementById('btnCalc').disabled = false;
-  log(`Дом установлен: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
-}
-
-document.getElementById('btnPlace').addEventListener('click', ()=>{
-  placingMode = !placingMode;
-  document.getElementById('btnPlace').classList.toggle('active', placingMode);
+$('btnGeo').addEventListener('click', () => {
+  if (!navigator.geolocation){ $('pointStatus').textContent = 'Геолокация недоступна в браузере'; return; }
+  $('pointStatus').innerHTML = '<span class="loader"></span> определяю…';
+  navigator.geolocation.getCurrentPosition(
+    p => { setHouse(p.coords.latitude, p.coords.longitude); map.setView(housePoint, 16); },
+    () => $('pointStatus').textContent = 'Не удалось получить местоположение (нужен HTTPS и разрешение)',
+    {enableHighAccuracy:true, timeout:12000}
+  );
 });
 
-document.getElementById('lat').addEventListener('change', tryManualCoords);
-document.getElementById('lon').addEventListener('change', tryManualCoords);
-function tryManualCoords(){
-  const lat = parseFloat(document.getElementById('lat').value);
-  const lon = parseFloat(document.getElementById('lon').value);
-  if(!isNaN(lat) && !isNaN(lon)) setHousePoint(lat, lon);
-}
-
-/* ============================================================
-   OVERPASS
-   ============================================================ */
-async function overpassQuery(q, opts={}){
-  const timeoutMs = opts.timeoutMs || 28000;
-  let lastErr = null;
-  for(const url of OVERPASS_MIRRORS){
-    const host = url.replace('https://','').split('/')[0];
+/* ================= ВНЕШНИЕ ДАННЫЕ ================= */
+async function overpass(query){
+  const urls = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+  for (const url of urls){
     try{
-      log(`Overpass → ${host}...`);
-      const controller = new AbortController();
-      const timer = setTimeout(()=>controller.abort(), timeoutMs);
-      const res = await fetch(url, {
-        method:'POST',
-        body:'data=' + encodeURIComponent(q),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      log(`✓ ${host} ответил`);
-      return data;
-    }catch(err){
-      const reason = err.name === 'AbortError' ? `таймаут ${timeoutMs/1000}с` : err.message;
-      lastErr = err;
-      log(`⚠ ${host}: ${reason} — пробую следующее зеркало`);
-    }
+      const r = await fetch(url, {method:'POST', body:'data='+encodeURIComponent(query),
+        headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+      if (r.ok) return await r.json();
+    }catch(e){ /* пробуем следующее зеркало */ }
   }
-  throw new Error('все зеркала Overpass недоступны (' + (lastErr ? lastErr.message : 'нет ответа') + ')');
+  throw new Error('Overpass API недоступен');
 }
 
-function buildingsQL(lat, lon, r){
-  return `[out:json][timeout:25];
-(
-  way["building"](around:${r},${lat},${lon});
-);
-out geom;`;
+async function elevations(points){ // points: [[lat,lon],...] до ~100
+  const lat = points.map(p=>p[0].toFixed(5)).join(',');
+  const lon = points.map(p=>p[1].toFixed(5)).join(',');
+  const r = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`);
+  if(!r.ok) throw new Error('Сервис рельефа недоступен');
+  return (await r.json()).elevation;
 }
 
-function hazardsQL(lat, lon, r){
-  return `[out:json][timeout:25];
-(
-  way["landuse"="military"](around:${r},${lat},${lon});
-  relation["landuse"="military"](around:${r},${lat},${lon});
-  way["military"](around:${r},${lat},${lon});
-  node["military"](around:${r},${lat},${lon});
-  relation["military"](around:${r},${lat},${lon});
-  way["man_made"="works"](around:${r},${lat},${lon});
-  way["landuse"="industrial"](around:${r},${lat},${lon});
-  relation["landuse"="industrial"](around:${r},${lat},${lon});
-  way["industrial"](around:${r},${lat},${lon});
-  way["power"="plant"](around:${r},${lat},${lon});
-  node["power"="plant"](around:${r},${lat},${lon});
-  way["power"="substation"](around:${r},${lat},${lon});
-  node["power"="substation"](around:${r},${lat},${lon});
-  way["pipeline"](around:${r},${lat},${lon});
-  way["man_made"="petroleum_well"](around:${r},${lat},${lon});
-  node["man_made"="petroleum_well"](around:${r},${lat},${lon});
-  way["man_made"="storage_tank"]["content"~"gas|oil|petroleum"](around:${r},${lat},${lon});
-  way["railway"="station"](around:${r},${lat},${lon});
-  node["railway"="station"](around:${r},${lat},${lon});
-  way["landuse"="railway"](around:${r},${lat},${lon});
-);
-out center tags;`;
-}
+/* ================= РАСЧЁТ ================= */
+const RAY_STEP_DEG = 20, RAY_HALF_SECTOR = 60;
+const RAY_DISTS = [300, 800, 1500, 3000, 5000, 8000]; // м, точки профиля вдоль луча
 
-function civilQL(lat, lon, r){
-  return `[out:json][timeout:25];
-(
-  way["amenity"="hospital"](around:${r},${lat},${lon});
-  node["amenity"="hospital"](around:${r},${lat},${lon});
-  way["amenity"="school"](around:${r},${lat},${lon});
-  way["amenity"="kindergarten"](around:${r},${lat},${lon});
-);
-out center tags;`;
-}
+$('btnCalc').addEventListener('click', runCalc);
 
-async function fetchBorderLine(){
-  log('Загружаю линию госграницы из OSM (admin_level=2)...');
-  const [s, w, n, e] = BORDER_BBOX;
-  const q = `[out:json][timeout:60];
-way["boundary"="administrative"]["admin_level"="2"](${s},${w},${n},${e});
-out geom;`;
-  try{
-    const data = await overpassQuery(q, {timeoutMs:65000});
-    const ways = (data.elements||[]).filter(el=>el.type==='way' && el.geometry && el.geometry.length>1);
-    if(ways.length === 0) throw new Error('пустой ответ (в этом bbox нет тегированных way admin_level=2)');
-
-    let flatPts = [];
-    const lines = [];
-    ways.forEach(wy=>{
-      const coords = wy.geometry.map(g=>[g.lon, g.lat]); // turf ждёт [lon,lat]
-      let simplifiedCoords = coords;
-      try{
-        const line = turf.lineString(coords);
-        const simplified = turf.simplify(line, {tolerance:0.008, highQuality:false});
-        simplifiedCoords = simplified.geometry.coordinates;
-      }catch(err){ /* если упростить не вышло — используем исходные точки way */ }
-      const latlon = simplifiedCoords.map(c=>[c[1], c[0]]);
-      lines.push(latlon);
-      flatPts.push(...latlon);
-    });
-
-    // грубый эвристический фильтр угла bbox, где вероятна примесь границы РФ/Беларусь
-    // (стык границ РФ/Украина/Беларусь). Не гарантированно точен — см. дисклеймер в UI.
-    flatPts = flatPts.filter(p => !(p[0] > 52.6 && p[1] < 31.6));
-    if(flatPts.length < 5) throw new Error('слишком мало точек после фильтрации');
-
-    BORDER_POINTS = flatPts;
-    BORDER_LINES_FOR_DRAW = lines;
-    log(`Линия границы загружена: ${ways.length} сегмент(ов) OSM, ${flatPts.length} точек после упрощения.`);
-    drawBorder('Госграница РФ/Украина (OSM admin_level=2, авто)', '#ffe066');
-    return true;
-  }catch(err){
-    log(`⚠ Не удалось загрузить точную линию границы (${err.message}). Использую резервный набор точек.`);
-    BORDER_POINTS = BORDER_POINTS_FALLBACK;
-    BORDER_LINES_FOR_DRAW = [BORDER_POINTS_FALLBACK];
-    drawBorder('Резервная линия границы (приблизительно)', '#ff9e3d');
-    return false;
-  }
-}
-
-function drawBorder(label, color){
-  borderLayer.clearLayers();
-  BORDER_LINES_FOR_DRAW.forEach((line, i)=>{
-    L.polyline(line, {color, weight:2, dashArray:'6,6', opacity:.85})
-      .bindTooltip(i===0 ? label : undefined, {sticky:true})
-      .addTo(borderLayer);
-  });
-}
-
-function classifyHazard(tags){
-  if(tags.military || tags.landuse === 'military') return HAZARD_CATEGORIES.military;
-  if(tags.power === 'plant') return HAZARD_CATEGORIES.power_plant;
-  if(tags.power === 'substation') return HAZARD_CATEGORIES.substation;
-  if(tags.pipeline || tags.man_made === 'petroleum_well' || (tags.man_made==='storage_tank')) return HAZARD_CATEGORIES.oilgas;
-  if(tags.railway === 'station' || tags.landuse === 'railway') return HAZARD_CATEGORIES.rail;
-  if(tags.man_made === 'works' || tags.landuse === 'industrial' || tags.industrial) return HAZARD_CATEGORIES.industrial;
-  return HAZARD_CATEGORIES.industrial; // fallback
-}
-
-function buildingHeightFromTags(tags){
-  if(!tags) return 6;
-  if(tags.height){
-    const h = parseFloat(String(tags.height).replace(/[^\d.]/g,''));
-    if(!isNaN(h) && h>0) return h;
-  }
-  if(tags['building:levels']){
-    const l = parseFloat(tags['building:levels']);
-    if(!isNaN(l) && l>0) return l*3;
-  }
-  return 6; // дефолт: типовой 2-этажный дом
-}
-
-/* ============================================================
-   ELEVATION (open-elevation, батчами, с кэшем)
-   ============================================================ */
-function roundKey(lat, lon){
-  // сетка ~30-50м для кэша/дедупликации
-  return lat.toFixed(4) + ',' + lon.toFixed(4);
-}
-
-async function fetchElevationBatch(points){
-  // points: [{lat,lon}], возвращает не нужно — просто наполняет elevationCache
-  const need = [];
-  const seen = new Set();
-  for(const p of points){
-    const k = roundKey(p.lat, p.lon);
-    if(elevationCache[k] === undefined && !seen.has(k)){
-      seen.add(k);
-      need.push({latitude:p.lat, longitude:p.lon, key:k});
-    }
-  }
-  if(need.length === 0) return;
-
-  const CHUNK = 90;
-  for(let i=0; i<need.length; i+=CHUNK){
-    const chunk = need.slice(i, i+CHUNK);
-    try{
-      const res = await fetch(ELEVATION_URL, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({locations: chunk.map(c=>({latitude:c.latitude, longitude:c.longitude}))})
-      });
-      if(!res.ok) throw new Error('elevation HTTP ' + res.status);
-      const data = await res.json();
-      data.results.forEach((r, idx)=>{
-        elevationCache[chunk[idx].key] = r.elevation;
-      });
-      log(`Рельеф: получено ${chunk.length} точек`);
-    }catch(err){
-      log(`⚠ Рельеф недоступен для части точек (${err.message}) — считаем как 0`);
-      chunk.forEach(c=> elevationCache[c.key] = 0);
-    }
-  }
-}
-
-function getElev(lat, lon){
-  const k = roundKey(lat, lon);
-  return elevationCache[k] !== undefined ? elevationCache[k] : 0;
-}
-
-/* ============================================================
-   ГЕОМЕТРИЯ
-   ============================================================ */
-function bearingDeg(lat1, lon1, lat2, lon2){
-  const b = turf.bearing(turf.point([lon1,lat1]), turf.point([lon2,lat2]));
-  return (b + 360) % 360;
-}
-function distM(lat1, lon1, lat2, lon2){
-  return turf.distance(turf.point([lon1,lat1]), turf.point([lon2,lat2]), {units:'kilometers'}) * 1000;
-}
-function destPoint(lat, lon, distMeters, brgDeg){
-  const p = turf.destination(turf.point([lon,lat]), distMeters/1000, brgDeg, {units:'kilometers'});
-  return {lat:p.geometry.coordinates[1], lon:p.geometry.coordinates[0]};
-}
-
-function computeSector(house){
-  let min = 360, max = -1, minPt=null, maxPt=null;
-  const withAz = BORDER_POINTS.map(p=>{
-    const az = bearingDeg(house.lat, house.lon, p[0], p[1]);
-    const d = distM(house.lat, house.lon, p[0], p[1]);
-    if(az < min){min = az; minPt = p;}
-    if(az > max){max = az; maxPt = p;}
-    return {lat:p[0], lon:p[1], az, dist:d};
-  });
-  return {min, max, points: withAz};
-}
-
-function nearestBorderByAzimuth(sectorPoints, az){
-  let best = sectorPoints[0], bestDiff = 999;
-  for(const p of sectorPoints){
-    const diff = Math.abs(p.az - az);
-    if(diff < bestDiff){bestDiff = diff; best = p;}
-  }
-  return best;
-}
-
-/* ============================================================
-   ОСНОВНОЙ РАСЧЁТ
-   ============================================================ */
-document.getElementById('btnCalc').addEventListener('click', runCalculation);
-
-async function runCalculation(){
-  if(!housePoint){ alert('Сначала укажите точку дома'); return; }
-  document.getElementById('btnCalc').disabled = true;
-  document.getElementById('log').textContent = '';
-  raysLayer.clearLayers(); buildingsLayer.clearLayers();
-  hazardsLayer.clearLayers(); civilLayer.clearLayers();
-
-  const rayStep = parseFloat(document.getElementById('rayStep').value);
-  const sampleStep = parseFloat(document.getElementById('sampleStep').value);
-  const maxRay = parseFloat(document.getElementById('maxRay').value);
-  const searchRadius = parseFloat(document.getElementById('searchRadius').value);
-  const useElevation = document.getElementById('useElevation').checked;
-  const manualHeight = parseFloat(document.getElementById('houseHeight').value) || 8;
-  const houseH = houseBuildingHeight || manualHeight;
+async function runCalc(){
+  if(!housePoint) return;
+  const btn = $('btnCalc'); btn.disabled = true;
+  const st = $('calcStatus');
+  rayLayer.clearLayers(); objLayer.clearLayers();
+  $('resultCard').style.display = 'none';
 
   try{
-    log('Запрашиваю здания вокруг дома (Overpass)...');
-    const bData = await overpassQuery(buildingsQL(housePoint.lat, housePoint.lon, searchRadius), {timeoutMs:28000});
-    buildingsData = (bData.elements||[]).filter(e=>e.type==='way' && e.geometry).map(e=>{
-      const coords = e.geometry.map(g=>[g.lon,g.lat]);
-      if(coords.length>=3){
-        if(coords[0][0]!==coords[coords.length-1][0] || coords[0][1]!==coords[coords.length-1][1]) coords.push(coords[0]);
-        try{
-          const poly = turf.polygon([coords]);
-          return {polygon: poly, height: buildingHeightFromTags(e.tags), tags: e.tags};
-        }catch(err){ return null; }
+    /* --- направление на границу --- */
+    let nearest = BORDER_PTS[0], best = Infinity;
+    for(const bp of BORDER_PTS){ const d = distM(housePoint, bp); if(d < best){ best = d; nearest = bp; } }
+    const brgToBorder = bearing(housePoint, nearest);
+
+    /* --- Overpass: здание, застройка, объекты --- */
+    st.innerHTML = '<span class="loader"></span> запрашиваю данные OSM…';
+    const [lat, lon] = housePoint;
+    const q = `[out:json][timeout:40];
+      way(around:25,${lat},${lon})["building"];out tags center 1;
+      way(around:500,${lat},${lon})["building"];out center 400;
+      (
+        nwr(around:5000,${lat},${lon})["landuse"="military"];
+        nwr(around:5000,${lat},${lon})["military"];
+        nwr(around:5000,${lat},${lon})["railway"~"^(station|yard|junction)$"];
+        nwr(around:5000,${lat},${lon})["power"~"^(plant|substation)$"];
+        nwr(around:5000,${lat},${lon})["aeroway"~"^(aerodrome|heliport)$"];
+        nwr(around:15000,${lat},${lon})["plant:source"="nuclear"];
+      );out tags center 60;`;
+    const osm = await overpass(q);
+
+    const elems = osm.elements || [];
+    /* здание пользователя (первый way с тэгами building в радиусе 25 м) */
+    let houseTags = null;
+    const nearBuildings = [];
+    const dangerObjs = [];
+    for(const el of elems){
+      const c = el.center ? [el.center.lat, el.center.lon] : (el.lat!==undefined ? [el.lat, el.lon] : null);
+      const t = el.tags || {};
+      if(t.building && c){
+        if(!houseTags && distM(housePoint, c) < 30) houseTags = t;
+        if(distM(housePoint, c) <= 500) nearBuildings.push(c);
       }
-      return null;
-    }).filter(Boolean);
-    log(`Найдено зданий: ${buildingsData.length}`);
-    drawBuildings();
+      if(c && (t.landuse==='military'||t.military||t.railway||t.power||t.aeroway||t['plant:source'])){
+        dangerObjs.push({c, t, d: distM(housePoint, c)});
+      }
+    }
 
-    log('Запрашиваю опасные объекты (Overpass)...');
-    const hData = await overpassQuery(hazardsQL(housePoint.lat, housePoint.lon, Math.max(searchRadius, 5000)), {timeoutMs:28000});
-    const hazards = (hData.elements||[]).map(e=>{
-      const lat = e.lat || (e.center && e.center.lat);
-      const lon = e.lon || (e.center && e.center.lon);
-      if(lat===undefined || lon===undefined) return null;
-      const cat = classifyHazard(e.tags||{});
-      const d = distM(housePoint.lat, housePoint.lon, lat, lon);
-      return {lat, lon, tags:e.tags||{}, cat, dist:d};
-    }).filter(Boolean).filter(h=>h.dist <= h.cat.radius*1.5);
-    log(`Найдено опасных объектов: ${hazards.length}`);
-    drawHazards(hazards);
+    /* --- высота здания --- */
+    let floors = parseInt($('floors').value)||2, hSrc = 'введено вручную';
+    if(houseTags){
+      if(houseTags['building:levels'] && !isNaN(parseFloat(houseTags['building:levels']))){
+        floors = Math.round(parseFloat(houseTags['building:levels']));
+        $('floors').value = floors; hSrc = 'из OSM (building:levels)';
+      } else if(houseTags.height && !isNaN(parseFloat(houseTags.height))){
+        floors = Math.max(1, Math.round(parseFloat(houseTags.height)/2.5));
+        $('floors').value = floors; hSrc = 'из OSM (height)';
+      }
+    }
+    const houseH = floors * 2.5;
+    $('floorsHint').textContent = `Высота: ~${houseH.toFixed(0)} м (${floors} эт., ${hSrc}). 1 этаж ≈ 2,5 м.`;
 
-    log('Запрашиваю гражданскую инфраструктуру (справочно)...');
-    const cData = await overpassQuery(civilQL(housePoint.lat, housePoint.lon, searchRadius), {timeoutMs:28000});
-    const civil = (cData.elements||[]).map(e=>{
-      const lat = e.lat || (e.center && e.center.lat);
-      const lon = e.lon || (e.center && e.center.lon);
-      if(lat===undefined || lon===undefined) return null;
-      return {lat, lon, tags:e.tags||{}};
-    }).filter(Boolean);
-    drawCivil(civil);
+    /* --- рельеф: дом + профили лучей --- */
+    st.innerHTML = '<span class="loader"></span> считаю рельеф вдоль лучей…';
+    const bearings = [];
+    for(let a=-RAY_HALF_SECTOR; a<=RAY_HALF_SECTOR; a+=RAY_STEP_DEG)
+      bearings.push((brgToBorder + a + 360) % 360);
 
-    // --- сектор угрозы от линии границы ---
-    const sector = computeSector(housePoint);
-    log(`Сектор угрозы: ${sector.min.toFixed(1)}° — ${sector.max.toFixed(1)}° (ширина ${(sector.max-sector.min).toFixed(1)}°)`);
+    const samplePts = [housePoint];
+    for(const b of bearings) for(const d of RAY_DISTS) samplePts.push(destPoint(housePoint, b, d));
+    const elevs = await elevations(samplePts);
+    const houseElev = elevs[0];
 
-    // --- подготовка точек рельефа ---
+    /* --- оценка каждого луча --- */
     const rays = [];
-    for(let az = sector.min; az <= sector.max; az += rayStep){
-      const nearestBorder = nearestBorderByAzimuth(sector.points, az);
-      const samples = [];
-      for(let d = sampleStep; d <= Math.min(maxRay, nearestBorder.dist); d += sampleStep){
-        const pt = destPoint(housePoint.lat, housePoint.lon, d, az);
-        samples.push({d, ...pt});
+    let idx = 1;
+    for(const b of bearings){
+      const prof = RAY_DISTS.map((d,i)=>({d, elev: elevs[idx+i]}));
+      idx += RAY_DISTS.length;
+
+      // рельеф: перекрывает ли что-то линию визирования от точки на луче к крыше дома
+      let terrainBlocked = false;
+      for(const p of prof){
+        // если по пути к дому есть точка рельефа выше линии «крыша дома — точка»
+        const lineH = houseElev + houseH;
+        if(p.elev > lineH + 12) { terrainBlocked = true; break; }
       }
-      rays.push({az, farDist: nearestBorder.dist, farLat: nearestBorder.lat, farLon: nearestBorder.lon, samples});
-    }
+      const avgElev = prof.reduce((s,p)=>s+p.elev,0)/prof.length;
+      const onHill = houseElev - avgElev; // >0 — дом выше окружения по лучу
 
-    if(useElevation){
-      log('Запрашиваю рельеф (open-elevation)...');
-      const allPts = [{lat:housePoint.lat, lon:housePoint.lon}];
-      const seenFar = new Set();
-      rays.forEach(r=>{
-        const k = r.farLat.toFixed(4) + ',' + r.farLon.toFixed(4);
-        if(!seenFar.has(k)){ seenFar.add(k); allPts.push({lat:r.farLat, lon:r.farLon}); }
-        r.samples.forEach(s=>allPts.push({lat:s.lat, lon:s.lon}));
-      });
-      await fetchElevationBatch(allPts);
-    }
-
-    const houseElev = useElevation ? getElev(housePoint.lat, housePoint.lon) : 0;
-    const Htarget = houseElev + houseH;
-
-    let clearCount = 0, totalCount = 0;
-    for(const ray of rays){
-      totalCount++;
-      const farElev = useElevation ? getElev(ray.farLat, ray.farLon) : 0;
-      const Hfar = farElev; // земля на линии границы, без здания
-      let blocked = false;
-      let blockPoint = null;
-      for(const s of ray.samples){
-        const losH = Htarget + (Hfar - Htarget) * (s.d / ray.farDist);
-        const terrainH = useElevation ? getElev(s.lat, s.lon) : 0;
-        let buildH = 0;
-        for(const b of buildingsData){
-          if(turf.booleanPointInPolygon(turf.point([s.lon, s.lat]), b.polygon)){
-            buildH = b.height;
-            break;
-          }
-        }
-        const obstacleH = terrainH + buildH;
-        if(obstacleH >= losH){
-          blocked = true;
-          blockPoint = s;
-          break;
-        }
+      // застройка: сколько зданий в коридоре 70 м в первых 450 м луча
+      let shieldCnt = 0;
+      for(const bc of nearBuildings){
+        const d = distM(housePoint, bc);
+        if(d < 20 || d > 450) continue;
+        const db = bearing(housePoint, bc);
+        let diff = Math.abs(db - b); if(diff > 180) diff = 360 - diff;
+        if(d * Math.sin(rad(Math.min(diff,90))) < 70 && diff < 45) shieldCnt++;
       }
-      ray.blocked = blocked;
-      ray.blockPoint = blockPoint;
-      if(!blocked) clearCount++;
-      drawRay(ray);
+
+      let open; // 0..1
+      if(terrainBlocked) open = 0.1;
+      else if(shieldCnt >= 3) open = 0.25;
+      else if(shieldCnt >= 1) open = 0.55;
+      else open = 1.0;
+      if(onHill > 12) open = Math.min(1, open + 0.25); // дом на холме — торчит над прикрытием
+
+      rays.push({b, open, onHill, shieldCnt, terrainBlocked});
+
+      const col = open > 0.75 ? '#ff5b5b' : open > 0.35 ? '#ffb020' : '#3ecf8e';
+      L.polyline([destPoint(housePoint, b, 8000), housePoint],
+        {color:col, weight:3, opacity:0.75, dashArray: open>0.35?null:'6 6'})
+        .bindTooltip(`Азимут ${b.toFixed(0)}° · ${terrainBlocked?'рельеф прикрывает':shieldCnt?`застройка (${shieldCnt} зд.)`:'открыто'}`)
+        .addTo(rayLayer);
     }
 
-    const exposure = totalCount>0 ? clearCount/totalCount : 0;
-    renderExposure(exposure, totalCount, clearCount);
-    renderHazardRisk(hazards);
-    document.getElementById('resultsBlock').style.display = 'block';
-    document.getElementById('hazardListBlock').style.display = hazards.length? 'block':'none';
-    log('Готово.');
+    /* --- опасные объекты на карте --- */
+    dangerObjs.sort((a,b)=>a.d-b.d);
+    const seen = new Set(); const shown = [];
+    for(const o of dangerObjs){
+      const key = Math.round(o.c[0]*1e4)+':'+Math.round(o.c[1]*1e4);
+      if(seen.has(key)) continue; seen.add(key);
+      shown.push(o);
+      if(shown.length<=15){
+        L.circleMarker(o.c,{radius:7,color:'#ff5b5b',fillColor:'#ff5b5b',fillOpacity:.5})
+          .bindTooltip(objName(o.t)+` · ${(o.d/1000).toFixed(1)} км`).addTo(objLayer);
+      }
+    }
+
+    /* --- итоговый индекс --- */
+    const openFrac = rays.reduce((s,r)=>s+r.open,0)/rays.length;          // 0..1
+    const avgHillAll = rays.reduce((s,r)=>s+r.onHill,0)/rays.length;
+    const density = nearBuildings.length;                                  // зданий в 500 м
+    const nearestObj = shown.length ? shown[0].d : Infinity;
+
+    let score = 6;
+    const factors = [];
+
+    const fOpen = Math.round(openFrac*32);
+    score += fOpen;
+    factors.push(['Открытость со стороны границы', `${Math.round(openFrac*100)}% лучей`, `+${fOpen}`]);
+
+    let fHill = 0;
+    if(avgHillAll > 10) fHill = 10; else if(avgHillAll < -10) fHill = -8;
+    score += fHill;
+    factors.push(['Рельеф (дом vs окружение)',
+      avgHillAll>10?`на возвышении (+${avgHillAll.toFixed(0)} м)`:avgHillAll<-10?`в низине (${avgHillAll.toFixed(0)} м)`:'ровно',
+      (fHill>=0?'+':'')+fHill]);
+
+    let fDens = 0;
+    if(density < 5) fDens = 10; else if(density > 40) fDens = -6;
+    score += fDens;
+    factors.push(['Застройка вокруг (500 м)',
+      density<5?`перед полем (${density} зд.)`:density>40?`«коробка домов» (${density} зд.)`:`${density} зданий`,
+      (fDens>=0?'+':'')+fDens]);
+
+    let fH = floors>=9?6:floors>=5?4:0;
+    score += fH;
+    factors.push(['Высота здания', `${floors} эт. ≈ ${houseH.toFixed(0)} м (${hSrc})`, `+${fH}`]);
+
+    let fObj = 0, objTxt = 'не найдено в 5 км';
+    if(nearestObj < 1000) fObj = 32; else if(nearestObj < 3000) fObj = 20; else if(nearestObj <= 5000) fObj = 10;
+    if(isFinite(nearestObj)) objTxt = `${objName(shown[0].t)} — ${(nearestObj/1000).toFixed(1)} км`;
+    score += fObj;
+    factors.push(['Ближайший опасный объект', objTxt, `+${fObj}`]);
+
+    const distBorderKm = best/1000;
+    let fBorder = distBorderKm<60?12:distBorderKm<150?7:distBorderKm<300?3:0;
+    score += fBorder;
+    factors.push(['Удаление от границы', `~${distBorderKm.toFixed(0)} км, азимут на границу ${brgToBorder.toFixed(0)}°`, `+${fBorder}`]);
+
+    score = Math.max(2, Math.min(95, Math.round(score)));
+
+    /* --- вывод --- */
+    let cat, cls;
+    if(score < 25){ cat='НИЗКАЯ открытость'; cls='low'; }
+    else if(score < 50){ cat='СРЕДНЯЯ открытость'; cls='mid'; }
+    else { cat='ПОВЫШЕННАЯ открытость'; cls='high'; }
+
+    $('scoreNum').textContent = score;
+    $('scoreNum').className = 'num ' + cls;
+    $('scoreCat').textContent = cat;
+    $('scoreCat').className = 'cat ' + cls;
+    const barCol = cls==='low'?'#3ecf8e':cls==='mid'?'#ffb020':'#ff5b5b';
+    $('scoreBar').style.cssText = `width:${score}%;background:${barCol}`;
+
+    $('factors').innerHTML = factors.map(f =>
+      `<div class="factor"><span>${f[0]}<br><small style="color:var(--muted)">${f[1]}</small></span><span class="val">${f[2]}</span></div>`
+    ).join('');
+
+    $('objectsList').innerHTML = shown.length
+      ? shown.slice(0,8).map(o=>`<li>${objName(o.t)} — ${(o.d/1000).toFixed(1)} км</li>`).join('')
+      : '<li>в радиусе 5 км тэгированных объектов не найдено</li>';
+
+    $('resultCard').style.display = 'flex';
+    st.textContent = '';
+    map.fitBounds(L.latLngBounds(rays.map(r=>destPoint(housePoint,r.b,8000)).concat([housePoint])).pad(0.15));
 
   }catch(err){
-    log('⚠ Ошибка: ' + err.message);
-    alert('Ошибка при расчёте: ' + err.message + '\nПроверьте соединение / попробуйте позже (Overpass/open-elevation — общедоступные сервисы, иногда перегружены).');
+    st.textContent = '⚠ ' + err.message + ' — попробуйте ещё раз через минуту.';
   }finally{
-    document.getElementById('btnCalc').disabled = false;
+    btn.disabled = false;
   }
 }
 
-/* ============================================================
-   ОТРИСОВКА
-   ============================================================ */
-function drawBuildings(){
-  buildingsData.forEach(b=>{
-    const latlngs = b.polygon.geometry.coordinates[0].map(c=>[c[1],c[0]]);
-    L.polygon(latlngs, {color:'#3a4a35', weight:1, fillColor:'#2a3527', fillOpacity:.5})
-      .bindTooltip(`h≈${b.height}м`)
-      .on('click', ()=>{
-        // клик по зданию рядом с домом можно использовать, чтобы принять его высоту как высоту дома
-        houseBuildingHeight = b.height;
-        document.getElementById('houseHeight').value = b.height;
-        log(`Высота дома принята из контура OSM: ${b.height} м`);
-      })
-      .addTo(buildingsLayer);
-  });
+function objName(t){
+  if(t['plant:source']==='nuclear') return '☢ АЭС / ядерный объект';
+  if(t.military || t.landuse==='military') return '🎖 воинская часть / военный объект';
+  if(t.power==='plant') return '⚡ электростанция (ТЭЦ/ГРЭС)';
+  if(t.power==='substation') return '⚡ электроподстанция';
+  if(t.railway==='yard'||t.railway==='junction') return '🚂 ж/д узел';
+  if(t.railway==='station') return '🚉 ж/д станция';
+  if(t.aeroway) return '✈ аэродром / вертодром';
+  return 'объект';
 }
-
-function drawHazards(hazards){
-  hazards.forEach(h=>{
-    const marker = L.circleMarker([h.lat, h.lon], {
-      radius:6, color:h.cat.color, fillColor:h.cat.color, fillOpacity:.8, weight:1
-    }).bindPopup(`<b>${h.cat.label}</b><br>Дистанция: ${Math.round(h.dist)} м<br>${h.tags.name||''}`);
-    L.circle([h.lat, h.lon], {radius:h.cat.radius, color:h.cat.color, weight:1, fillOpacity:.03, dashArray:'4,4'})
-      .addTo(hazardsLayer);
-    marker.addTo(hazardsLayer);
-  });
-}
-
-function drawCivil(civil){
-  civil.forEach(c=>{
-    L.circleMarker([c.lat, c.lon], {radius:5, color:CIVIL_COLOR, fillColor:CIVIL_COLOR, fillOpacity:.8, weight:1})
-      .bindPopup(`${c.tags.amenity||''}<br>${c.tags.name||''}`)
-      .addTo(civilLayer);
-  });
-}
-
-function drawRay(ray){
-  const start = [housePoint.lat, housePoint.lon];
-  const endPt = ray.blocked && ray.blockPoint
-    ? [ray.blockPoint.lat, ray.blockPoint.lon]
-    : (ray.samples.length ? [ray.samples[ray.samples.length-1].lat, ray.samples[ray.samples.length-1].lon] : start);
-  L.polyline([start, endPt], {
-    color: ray.blocked ? '#ff4d4d' : '#3ddc84',
-    weight: 2, opacity: .75
-  }).addTo(raysLayer);
-}
-
-function renderExposure(exposure, total, clear){
-  const pct = Math.round(exposure*100);
-  const el = document.getElementById('valExposure');
-  el.textContent = pct + '%';
-  el.className = 'val ' + (pct>=60?'danger':pct>=30?'warn':'safe');
-  document.getElementById('exposureNote').textContent =
-    `Открытых лучей: ${clear} из ${total}. Чем выше — тем меньше здание экранировано соседней застройкой и рельефом в направлении границы.`;
-}
-
-function renderHazardRisk(hazards){
-  let maxRisk = 0, top = null;
-  hazards.forEach(h=>{
-    const r = Math.max(0, 1 - h.dist/h.cat.radius);
-    if(r > maxRisk){maxRisk = r; top = h;}
-  });
-  const pct = Math.round(maxRisk*100);
-  const el = document.getElementById('valHazard');
-  el.textContent = pct + '%';
-  el.className = 'val ' + (pct>=60?'danger':pct>=30?'warn':'safe');
-  document.getElementById('hazardNote').textContent = top
-    ? `Основной вклад: ${top.cat.label} в ${Math.round(top.dist)} м.`
-    : 'Опасных объектов в зоне риска не найдено.';
-
-  const list = document.getElementById('hazardList');
-  list.innerHTML = '';
-  hazards.sort((a,b)=>a.dist-b.dist).slice(0,20).forEach(h=>{
-    const d = document.createElement('div');
-    d.innerHTML = `<span style="color:${h.cat.color}">●</span> ${h.cat.label} — ${Math.round(h.dist)} м ${h.tags.name?('('+h.tags.name+')'):''}`;
-    list.appendChild(d);
-  });
-}
-
-document.getElementById('btnBorderRefresh').addEventListener('click', ()=>{
-  document.getElementById('btnBorderRefresh').disabled = true;
-  fetchBorderLine().finally(()=>{ document.getElementById('btnBorderRefresh').disabled = false; });
-});
-
-initMap();
-drawBorder('Резервная линия (идёт загрузка точной...)', '#555555');
-fetchBorderLine();
 </script>
 </body>
 </html>
